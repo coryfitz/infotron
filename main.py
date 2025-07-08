@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header
+from textual.widgets import Footer
 
 class InfotronApp(App):
     """A Textual app to manage stopwatches."""
@@ -8,7 +8,6 @@ class InfotronApp(App):
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
-        #yield Header()
         yield Footer()
 
     def action_toggle_dark(self) -> None:
