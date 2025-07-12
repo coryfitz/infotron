@@ -32,6 +32,10 @@ class CodeEditor(TextArea):
         
         self.last_click_time = current_time
 
+    def clear_text(self) -> None:
+        """Clear all text in the editor."""
+        self.text = ""
+
 class Explorer(DirectoryTree):
 
     def __init__(self, **kwargs):
@@ -46,6 +50,7 @@ class DisplayTable(DataTable):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.database_path = 'database/database.db'
+        self.current_display_query = None  # Track exactly what query is currently displayed
 
     def load_data_from_db(self, query: str = None):
         """Load data from SQLite database and populate the table."""
@@ -69,6 +74,10 @@ class DisplayTable(DataTable):
             columns = [description[0] for description in cursor.description]
             rows = cursor.fetchall()
             conn.close()
+            
+            # Store the current query for refresh purposes
+            if query.strip().upper().startswith('SELECT'):
+                self.current_display_query = query
             
             self.clear()
             self.add_columns(*columns)
@@ -109,16 +118,16 @@ class DisplayTable(DataTable):
                 conn.close()
                 
                 # After successful execution, refresh the table display
-                # For CREATE TABLE, show the new empty table structure
                 if query_upper.startswith('CREATE TABLE'):
-                    # Extract table name and show its structure
+                    # For CREATE TABLE, show the new empty table structure
                     self.refresh_display_after_ddl()
                 elif query_upper.startswith('DROP'):
                     # After DROP, show the default table or empty display
+                    self.current_display_query = None
                     self.load_data_from_db()
                 else:
                     # For INSERT/UPDATE/DELETE, refresh the current table view
-                    self.load_data_from_db()
+                    self.refresh_current_table_view()
                     
             except sqlite3.Error as e:
                 self.clear()
@@ -131,6 +140,40 @@ class DisplayTable(DataTable):
         else:
             # For SELECT queries, load data normally
             self.load_data_from_db(query)
+    
+    def refresh_current_table_view(self):
+        """Refresh the current table view after DML operations."""
+        if not self.current_display_query:
+            self.load_data_from_db()
+            return
+            
+        try:
+            # Get fresh data
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            cursor.execute(self.current_display_query)
+            columns = [description[0] for description in cursor.description]
+            rows = cursor.fetchall()
+            conn.close()
+            
+            # Force complete table rebuild
+            self.clear(columns=True)  # Clear both data and columns
+            self.add_columns(*columns)
+            
+            if rows:
+                self.add_rows(rows)
+            
+            self.zebra_stripes = True
+                
+        except Exception as e:
+            # Fallback - try to re-execute the same query through load_data_from_db
+            try:
+                self.load_data_from_db(self.current_display_query)
+            except Exception as e2:
+                # Last resort: clear everything and show error
+                self.clear(columns=True)
+                self.add_column("Error")
+                self.add_row(f"Refresh failed: {str(e)}")
     
     def refresh_display_after_ddl(self):
         """Refresh the display after DDL operations like CREATE TABLE."""
@@ -146,6 +189,8 @@ class DisplayTable(DataTable):
                 # Show the last table (most recently created)
                 table_name = tables[-1][0]
                 query = f"SELECT * FROM {table_name}"
+                self.current_display_query = query
+                
                 cursor.execute(query)
                 columns = [description[0] for description in cursor.description]
                 
@@ -176,9 +221,7 @@ class InfotronApp(App):
     """A Textual app using CSS Grid for layout."""
 
     BINDINGS = [
-        ("d", "toggle_dark", "Toggle dark mode"),
-        ("ctrl+r", "execute_query", "Execute query"),
-        ("ctrl+a", "select_all_in_editor", "Select all in query editor")
+        ("ctrl+d", "toggle_dark", "Toggle dark mode"),
     ]
     
     CSS = """
@@ -225,6 +268,14 @@ class InfotronApp(App):
         text-align: center;
         text-style: bold;
     }
+
+    #clear_btn {
+        height: 1;
+        width: 10;
+        margin: 0 1;
+        text-align: center;
+        text-style: bold;
+    }
     
     .clickable:hover {
         background: $primary-darken-1;
@@ -246,6 +297,7 @@ class InfotronApp(App):
             query_section.border_title = 'Query Editor'
             with Horizontal():
                 yield Static("▶ Execute", id='execute_btn', classes="clickable")
+                yield Static("▶ Clear", id='clear_btn', classes="clickable")
             yield CodeEditor(id='query_editor')
             
         yield AppFooter()
@@ -259,11 +311,6 @@ class InfotronApp(App):
         if query:
             data_table.execute_query(query)
 
-    def action_select_all_in_editor(self) -> None:
-        """Select all text in the query editor."""
-        query_editor = self.query_one("#query_editor", CodeEditor)
-        query_editor.select_all()
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if event.button.id == "execute_btn":
@@ -273,6 +320,9 @@ class InfotronApp(App):
         """Handle click events on clickable elements."""
         if event.widget.id == "execute_btn":
             self.action_execute_query()
+        elif event.widget.id == "clear_btn":
+            query_editor = self.query_one("#query_editor", CodeEditor)
+            query_editor.clear_text()
 
 if __name__ == "__main__":
     app = InfotronApp()
