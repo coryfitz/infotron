@@ -4,8 +4,9 @@ from textual.containers import Horizontal, Vertical
 from textual import events
 import sqlite3
 import time
+from ai import query_database
 
-class CodeEditor(TextArea):
+class QueryEditor(TextArea):
     """A subclass of TextArea with parenthesis-closing functionality and double-click selection."""
 
     def __init__(self, **kwargs):
@@ -35,6 +36,80 @@ class CodeEditor(TextArea):
     def clear_text(self) -> None:
         """Clear all text in the editor."""
         self.text = ""
+
+class AiEditor(Vertical):
+    """A container with two text areas: one for LLM responses (top) and one for user input (bottom)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def compose(self) -> ComposeResult:
+        """Create the two text areas."""
+        yield TextArea(
+            id="ai_response_area",
+            read_only=True,
+            show_line_numbers=False,
+            text="AI responses will appear here..."
+        )
+        yield TextArea(
+            id="ai_input_area", 
+            language="sql"
+        )
+
+    def on_mount(self) -> None:
+        """Set up the text areas after mounting."""
+        response_area = self.query_one("#ai_response_area", TextArea)
+        input_area = self.query_one("#ai_input_area", TextArea)
+        
+        # Make response area take up more space (read-only display)
+        response_area.styles.height = "70%"
+        input_area.styles.height = "30%"
+        
+        # Add borders and titles
+        response_area.border_title = "AI Response"
+        input_area.border_title = "Your Input"
+
+    @property
+    def text(self) -> str:
+        """Get text from the input area (for compatibility with existing code)."""
+        try:
+            input_area = self.query_one("#ai_input_area", TextArea)
+            return input_area.text
+        except:
+            return ""
+
+    @text.setter 
+    def text(self, value: str) -> None:
+        """Set text in the input area (for compatibility with existing code)."""
+        try:
+            input_area = self.query_one("#ai_input_area", TextArea)
+            input_area.text = value
+        except:
+            pass
+
+    def clear_text(self) -> None:
+        """Clear text in the input area."""
+        try:
+            input_area = self.query_one("#ai_input_area", TextArea)
+            input_area.clear()
+        except:
+            pass
+
+    def set_response(self, response: str) -> None:
+        """Set the AI response text."""
+        try:
+            response_area = self.query_one("#ai_response_area", TextArea)
+            response_area.text = response
+        except:
+            pass
+
+    def get_input(self) -> str:
+        """Get the user input text."""
+        try:
+            input_area = self.query_one("#ai_input_area", TextArea)
+            return input_area.text
+        except:
+            return ""
 
 class Explorer(DirectoryTree):
 
@@ -225,68 +300,95 @@ class InfotronApp(App):
     ]
     
     CSS = """
-    Screen {
-        layout: grid;
-        grid-size: 3 3;
-        grid-columns: 1fr;
-        grid-gutter: 1;
-    }
-    
-    #sidebar {
-        column-span: 1;
-        row-span: 3;
-        background: $surface;
-        border: solid $primary;
-        border-title-align: center;
-        height: 100%;
-    }
-    
-    #main_table {
-        column-span: 2;
-        row-span: 2;
-        border: solid $primary;
-        border-title-align: center;
-        height: 100%;
-    }
-    
-    #query_section {
-        column-span: 2;
-        row-span: 1;
-        background: $surface;
-        border: solid $secondary;
-        border-title-align: center;
-    }
-    
-    #query_editor {
-        height: 2fr;
-    }
-    
-    #execute_btn {
-        height: 1;
-        width: 10;
-        margin: 0 1;
-        text-align: center;
-        text-style: bold;
-    }
+Screen {
+    layout: grid;
+    grid-size: 4 4;
+    grid-columns: 1fr;
+    grid-gutter: 1;
+}
 
-    #clear_btn {
-        height: 1;
-        width: 10;
-        margin: 0 1;
-        text-align: center;
-        text-style: bold;
-    }
-    
-    .clickable:hover {
-        background: $primary-darken-1;
-        text-style: bold;
-    }
-    
-    Footer {
-        column-span: 2;
-        row-span: 1;
-    }
-    """
+#sidebar {
+    column-span: 1;
+    row-span: 4;
+    background: $surface;
+    border: solid $primary;
+    border-title-align: center;
+    height: 100%;
+}
+
+#main_table {
+    column-span: 3;
+    row-span: 2;
+    border: solid $primary;
+    border-title-align: center;
+    height: 100%;
+}
+
+#query_section {
+    column-span: 3;
+    row-span: 2;
+    background: $surface;
+    border: solid $secondary;
+    border-title-align: center;
+}
+
+#query_section > Horizontal {
+    align: left top;
+}
+
+#current_editor {
+    height: 2fr;
+}
+
+#ai_response_area {
+    border-title-color: white;
+}
+
+#ai_input_area {
+    border-title-color: white;
+}
+
+#execute_btn {
+    height: 1;
+    width: 10;
+    margin: 0 1;
+    text-align: center;
+    text-style: bold;
+}
+
+#clear_btn {
+    height: 1;
+    width: 10;
+    margin: 0 1;
+    text-align: center;
+    text-style: bold;
+}
+
+#toggle_btn {
+    height: 1;
+    width: 10;
+    margin: 0 1;
+    text-align: center;
+    text-style: bold;
+    dock: right;
+}
+
+.clickable:hover {
+    background: $primary-darken-1;
+    text-style: bold;
+}
+
+Footer {
+    column-span: 2;
+    row-span: 1;
+}
+"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.is_ai_mode = False  # Track current mode
+        self.query_editor_text = ""  # Store SQL editor content
+        self.ai_input_text = ""  # Store AI input content
 
     def compose(self) -> ComposeResult:
         yield Explorer(id='sidebar')
@@ -298,31 +400,109 @@ class InfotronApp(App):
             with Horizontal():
                 yield Static("▶ Execute", id='execute_btn', classes="clickable")
                 yield Static("▶ Clear", id='clear_btn', classes="clickable")
-            yield CodeEditor(id='query_editor')
+                yield Static("▶ AI", id='toggle_btn', classes="clickable")
+            yield QueryEditor(id='current_editor')
             
         yield AppFooter()
 
-    def action_execute_query(self) -> None:
-        """Execute the SQL query from the editor."""
-        query_editor = self.query_one("#query_editor", CodeEditor)
-        data_table = self.query_one("#main_table", DisplayTable)
+    async def toggle_editor_mode(self) -> None:
+        """Toggle between Query Editor and AI Editor modes."""
+        query_section = self.query_one("#query_section", Vertical)
+        current_editor = self.query_one("#current_editor")
+        toggle_btn = self.query_one("#toggle_btn", Static)
         
-        query = query_editor.text.strip()
-        if query:
-            data_table.execute_query(query)
+        # Store current text before switching
+        if self.is_ai_mode:
+            # Coming from AI mode, save AI input text
+            self.ai_input_text = current_editor.text
+        else:
+            # Coming from Query mode, save query text
+            self.query_editor_text = current_editor.text
+        
+        # Remove current editor and wait for it to complete
+        await current_editor.remove()
+        
+        if self.is_ai_mode:
+            # Switch back to Query Editor
+            new_editor = QueryEditor(id='current_editor')
+            query_section.border_title = 'Query Editor'
+            toggle_btn.update("▶ AI")
+            self.is_ai_mode = False
+            # Restore query editor text
+            new_editor.text = self.query_editor_text
+        else:
+            # Switch to AI Editor
+            new_editor = AiEditor(id='current_editor')
+            query_section.border_title = 'AI Editor'
+            toggle_btn.update("▶ SQL")
+            self.is_ai_mode = True
+            # Restore AI input text (but only if it's not the placeholder)
+            if self.ai_input_text and self.ai_input_text != "Enter your prompt here...":
+                new_editor.text = self.ai_input_text
+            else:
+                # Clear the placeholder text when switching to AI mode
+                new_editor.text = ""
+        
+        # Add new editor
+        query_section.mount(new_editor)
+
+    def action_execute_query(self) -> None:
+        """Execute the SQL query or AI query depending on current mode."""
+        current_editor = self.query_one("#current_editor")
+        
+        if self.is_ai_mode:
+            # AI mode - use natural language query
+            user_input = current_editor.text.strip()
+            if user_input:
+                try:
+                    # Query the database using AI
+                    #current_editor.set_response(user_input)
+                    result = query_database(user_input)
+                    current_editor.set_response(str(result))
+                    
+                    """
+
+                    if result['success']:
+                        # Display the AI response
+                        response_text = result['answer']
+                        if result['sql_query']:
+                            response_text += f"\n\n--- Generated SQL ---\n{result['sql_query']}"
+                        
+                        current_editor.set_response(response_text)
+                        
+                        # Optionally, if there's a SQL query, execute it to show results in the table
+                        if result['sql_query']:
+                            data_table = self.query_one("#main_table", DisplayTable)
+                            data_table.execute_query(result['sql_query'])
+                    else:
+                        # Display error message
+                        current_editor.set_response(result['answer'])
+
+                    """
+                        
+                except Exception as e:
+                    current_editor.set_response(f"Error processing AI query: {str(e)}")
+        else:
+            # SQL mode - execute SQL directly
+            data_table = self.query_one("#main_table", DisplayTable)
+            query = current_editor.text.strip()
+            if query:
+                data_table.execute_query(query)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if event.button.id == "execute_btn":
             self.action_execute_query()
 
-    def on_click(self, event: events.Click) -> None:
+    async def on_click(self, event: events.Click) -> None:
         """Handle click events on clickable elements."""
         if event.widget.id == "execute_btn":
             self.action_execute_query()
         elif event.widget.id == "clear_btn":
-            query_editor = self.query_one("#query_editor", CodeEditor)
-            query_editor.clear_text()
+            current_editor = self.query_one("#current_editor")
+            current_editor.clear_text()
+        elif event.widget.id == "toggle_btn":
+            await self.toggle_editor_mode()
 
 if __name__ == "__main__":
     app = InfotronApp()
