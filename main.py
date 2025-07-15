@@ -1,10 +1,13 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Button, DataTable, DirectoryTree, Footer, TextArea, Static
+from textual.widgets import Button, DataTable, Tree, Footer, TextArea, Static
 from textual.containers import Horizontal, Vertical
 from textual import events
 import sqlite3
 import time
 from ai import query_database
+from textual.widgets.tree import TreeNode
+import sqlite3
+import os
 
 class QueryEditor(TextArea):
     """A subclass of TextArea with parenthesis-closing functionality and double-click selection."""
@@ -111,14 +114,88 @@ class AiEditor(Vertical):
         except:
             return ""
 
-class Explorer(DirectoryTree):
+class Explorer(Tree):
+    """Enhanced Explorer that shows database tables and file structure."""
 
     def __init__(self, **kwargs):
-        conn = sqlite3.connect('database/database.db')
-        conn.close()
-        directory = "./database"
-        super().__init__(directory, **kwargs)
+        super().__init__("Database Explorer", **kwargs)
         self.border_title = 'Explorer'
+        self.database_path = 'database/database.db'
+        self.show_root = False
+
+    def on_mount(self) -> None:
+        """Load the database structure when the widget mounts."""
+        self.load_database_structure()
+
+    def load_database_structure(self):
+        """Load and display the database structure."""
+        try:
+            # Check if database file exists
+            if not os.path.exists(self.database_path):
+                self.root.add_leaf("Database file not found")
+                return
+
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            
+            # Get all tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+            tables = cursor.fetchall()
+            
+            if not tables:
+                self.root.add_leaf("No tables found")
+                conn.close()
+                return
+            
+            # Add database file node
+            db_node = self.root.add("📁 database.db", expand=True)
+            
+            # Add tables node
+            tables_node = db_node.add("📊 Tables", expand=True)
+            
+            for table_name in tables:
+                table_name = table_name[0]
+                
+                # Get table info
+                cursor.execute(f"PRAGMA table_info({table_name});")
+                columns = cursor.fetchall()
+                
+                # Get row count
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name};")
+                row_count = cursor.fetchone()[0]
+                
+                # Add table node with row count
+                table_node = tables_node.add(f"🗃️ {table_name} ({row_count} rows)", data={"type": "table", "name": table_name})
+                
+                # Add columns as children
+                for col in columns:
+                    col_name = col[1]  # column name
+                    col_type = col[2]  # column type
+                    is_pk = col[5]     # is primary key
+                    pk_indicator = " 🔑" if is_pk else ""
+                    table_node.add_leaf(f"📋 {col_name} ({col_type}){pk_indicator}")
+            
+            conn.close()
+            
+        except sqlite3.Error as e:
+            self.root.add_leaf(f"Database error: {str(e)}")
+        except Exception as e:
+            self.root.add_leaf(f"Error: {str(e)}")
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Handle tree node selection."""
+        node = event.node
+        if hasattr(node, 'data') and node.data and node.data.get('type') == 'table':
+            # When a table is selected, show its data in the main table
+            table_name = node.data['name']
+            data_table = self.app.query_one("#main_table")
+            data_table.load_data_from_db(f"SELECT * FROM {table_name}")
+            data_table.border_title = f"Table: {table_name}"
+
+    def refresh_structure(self):
+        """Refresh the database structure display."""
+        self.clear()
+        self.load_database_structure()
 
 class DisplayTable(DataTable):
 
@@ -140,6 +217,7 @@ class DisplayTable(DataTable):
                 if tables:
                     table_name = tables[0][0]
                     query = f"SELECT * FROM {table_name}"
+                    self.border_title = f"Table: {table_name}"
                 else:
                     # No tables found, show empty table
                     conn.close()
@@ -191,6 +269,8 @@ class DisplayTable(DataTable):
                 cursor.execute(query)
                 conn.commit()
                 conn.close()
+
+                self.app.refresh_explorer_after_ddl()
                 
                 # After successful execution, refresh the table display
                 if query_upper.startswith('CREATE TABLE'):
@@ -503,6 +583,14 @@ Footer {
             current_editor.clear_text()
         elif event.widget.id == "toggle_btn":
             await self.toggle_editor_mode()
+
+    def refresh_explorer_after_ddl(self):
+        """Refresh the explorer after DDL operations."""
+        try:
+            explorer = self.query_one("#sidebar", Explorer)
+            explorer.refresh_structure()
+        except Exception:
+            pass  # Explorer might not be mounted yet
 
 if __name__ == "__main__":
     app = InfotronApp()
